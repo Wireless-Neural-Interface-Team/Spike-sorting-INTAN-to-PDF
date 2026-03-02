@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.scripts]
-spike-sorting-intan-to-pdf = "gui_run_pipeline:run_app"
+spike-sorting-intan-to-pdf-gui = "gui_run_pipeline:run_app"
 
 [tool.setuptools.package-dir]
 "" = "python_files"
