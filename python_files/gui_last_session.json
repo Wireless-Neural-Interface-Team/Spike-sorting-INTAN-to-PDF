@@ -1,13 +1,11 @@
 {
   "folder_path": "C:/Spike Electrophysiology/20251205 - P8 retina/Recordings/20251205 - BlueLEDStim_5sON_20s_interStim_RetinaP8_retina3_251205_165648_251205_170112",
   "use_trigger": true,
+  "trigger_type": "led",
   "trigger_threshold": "37000",
-  "trigger_edge": "-1",
+  "trigger_polarity": "Falling Edge",
   "trigger_min_interval": "5.1",
   "trigger_channel_index": "0",
   "sorter_name": "tridesclous",
-  "my_protocol_filename": "my_protocol.json",
-  "my_probe_path": "C:/Users/WNIlabs/Documents/GitHub/mea-editor/MEA_RdLGN64.json",
-  "min_freq": "400",
-  "max_freq": "5000"
+  "my_probe_path": "C:/Users/WNIlabs/Documents/Pierre/Electrophy/Recordings/20260305/MEA_RdLGN64.json"
 }

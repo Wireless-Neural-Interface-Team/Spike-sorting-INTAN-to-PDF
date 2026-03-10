@@ -126,12 +126,15 @@ class PDFGenerator:
 
         protocol_pre = pformat(protocol.params.get("preprocessing", {}), width=100, compact=False)
         protocol_post_keys = list(protocol.params.get("postprocessing", {}).keys())
+        bandpass = protocol.params.get("preprocessing", {}).get("bandpass_filter", {})
 
         channel_count = len(rhs.channel_ids) if rhs.channel_ids is not None else 0
         channel_ids_full = ", ".join(map(str, rhs.channel_ids)) if channel_count else "N/A"
 
+        trigger_type = getattr(ts_params, "trigger_type", "N/A")
         trigger_threshold = getattr(trigger, "threshold", "N/A")
-        trigger_edge = getattr(trigger, "edge", "N/A")
+        trigger_edge_val = getattr(trigger, "edge", None)
+        trigger_polarity = "Rising Edge" if trigger_edge_val == 1 else "Falling Edge" if trigger_edge_val == -1 else "N/A"
         trigger_min_interval = getattr(trigger, "min_interval", "N/A")
         trigger_channel_index = getattr(ts_params, "trigger_channel_index", "N/A")
 
@@ -141,7 +144,7 @@ class PDFGenerator:
             "",
             "[1] Protocol",
             f"- Protocol file path: {getattr(protocol, '_file_path', 'N/A')}",
-            f"- Bandpass min/max (Hz): {getattr(protocol, '_min_freq', 'N/A')} / {getattr(protocol, '_max_freq', 'N/A')}",
+            f"- Bandpass min/max (Hz): {bandpass.get('freq_min', 'N/A')} / {bandpass.get('freq_max', 'N/A')}",
             f"- Preprocessing config: {protocol_pre}",
             f"- Postprocessing steps ({len(protocol_post_keys)}): {', '.join(protocol_post_keys)}",
             "",
@@ -153,8 +156,9 @@ class PDFGenerator:
             f"- Channel IDs (full list): {channel_ids_full}",
             "",
             "[3] Trigger",
+            f"- Type: {trigger_type}",
             f"- Threshold: {trigger_threshold}",
-            f"- Edge: {trigger_edge}",
+            f"- Polarity: {trigger_polarity}",
             f"- Min interval (s): {trigger_min_interval}",
             f"- Detected trigger count: {len(getattr(rhs, 'trigger_timestamps', []))}",
             "",

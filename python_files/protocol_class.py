@@ -10,6 +10,9 @@ The resulting dictionary is intended to be consumed by downstream
 pipeline code.
 """
 
+import copy
+
+
 class Protocol:
     """Store and expose analysis protocol parameters.
 
@@ -22,17 +25,24 @@ class Protocol:
     file_path : str
         Path to a protocol file or output location associated with this protocol.
         It is kept as metadata for traceability and potential save/load features.
+    params : dict, optional
+        Full protocol params dict. If provided, used as-is (min_freq/max_freq ignored).
+        If None, built from min_freq and max_freq with default postprocessing.
     """
 
-    def __init__(self, min_freq, max_freq, file_path):
+    def __init__(self, min_freq, max_freq, file_path, params=None):
         """Build the protocol parameter dictionary used by the pipeline."""
-        self._min_freq = min_freq
-        self._max_freq = max_freq
         # Keep the protocol path for bookkeeping (e.g., persistence, audit trail).
         self._file_path = file_path
 
-        # Main protocol dictionary passed to processing functions.
-        self.params = {
+        if params is not None:
+            self.params = copy.deepcopy(params)
+        else:
+            self.params = self._default_params(min_freq, max_freq)
+
+    def _default_params(self, min_freq, max_freq):
+        """Build the default protocol dictionary."""
+        return {
             'preprocessing': {
                 # Band-pass filter configuration applied before spike sorting.
                 'bandpass_filter': {"freq_min" : min_freq, "freq_max" : max_freq},
