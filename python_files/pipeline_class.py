@@ -6,6 +6,7 @@ Created on Mon Feb  9 12:03:23 2026
 """
 import os
 import copy
+from collections import OrderedDict
 import spikeinterface.sorters as ss
 import spikeinterface.curation as scur
 import spikeinterface.preprocessing as spre
@@ -53,14 +54,36 @@ class Pipeline:
         Run preprocessing, sorter execution, curation, and analyzer computation.
         """
         # 1) Apply preprocessing and keep a single local recording object.
+        # `detect_bad_channels` is not a recording preprocessor in SI pipeline;
+        # handle it explicitly around apply_preprocessing_pipeline.
+        preprocessing_params = copy.deepcopy(self._protocol_params["preprocessing"])
+        detect_bad_cfg = preprocessing_params.pop("detect_bad_channels", None)
+        input_rec = self._rhs_files._amplifier_channel_recording
+
+        # Safety: always run unsigned_to_signed first when configured.
+        if "unsigned_to_signed" in preprocessing_params:
+            ordered_pre = OrderedDict()
+            ordered_pre["unsigned_to_signed"] = preprocessing_params["unsigned_to_signed"]
+            for key, value in preprocessing_params.items():
+                if key == "unsigned_to_signed":
+                    continue
+                ordered_pre[key] = value
+            preprocessing_params = ordered_pre
+
         rec = spre.apply_preprocessing_pipeline(
-            self._rhs_files._signed_amplifier_channel_recording,
-            self._protocol_params['preprocessing'],
+            input_rec,
+            preprocessing_params,
         )
+
+        if detect_bad_cfg is not None:
+            detect_bad_cfg = detect_bad_cfg if isinstance(detect_bad_cfg, dict) else {}
+            bad_channel_ids, _ = spre.detect_bad_channels(rec, **detect_bad_cfg)
+            if len(bad_channel_ids) > 0:
+                rec = rec.remove_channels(bad_channel_ids)
         # 2) Re-attach probe after preprocessing when available.
         if getattr(self._rhs_files, "_probe", None) is not None:
             rec = rec.set_probe(self._rhs_files._probe)
-        self._rhs_files._pre_processed_signed_amplifier_channel_recording = rec
+        self._rhs_files._pre_processed_recording = rec
 
         # 3) Run sorter with the same recording object.
         sorting_results = ss.run_sorter(

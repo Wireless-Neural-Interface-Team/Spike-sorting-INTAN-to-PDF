@@ -22,6 +22,7 @@ from datetime import datetime
 import ctypes
 import threading
 import multiprocessing
+import subprocess
 from queue import Empty
 from collections import defaultdict
 
@@ -366,6 +367,14 @@ class PipelineGUI(QMainWindow):
         )
         prep += 1
 
+        # Filter params: shown directly below filter type dropdown.
+        self.preproc_filter_params_container = QWidget()
+        self.preproc_filter_params_layout = QVBoxLayout(self.preproc_filter_params_container)
+        self.preproc_filter_params_layout.setContentsMargins(0, 0, 0, 0)
+        self.preproc_filter_params_layout.setSpacing(4)
+        preprocessing_layout.addWidget(self.preproc_filter_params_container, prep, 0, 1, 3)
+        prep += 1
+
         self.preproc_steps_scroll = QScrollArea()
         self.preproc_steps_scroll.setWidgetResizable(True)
         self.preproc_steps_scroll.setMinimumHeight(320)
@@ -376,6 +385,33 @@ class PipelineGUI(QMainWindow):
         self.preproc_steps_layout.setColumnMinimumWidth(1, 16)
         row = 0
         for step_name in self._preprocessing_steps_order:
+            if step_name in self._filter_steps:
+                # For filter steps, no checkbox row. Params are displayed under filter dropdown.
+                panel = QWidget()
+                panel_layout = QGridLayout(panel)
+                panel_layout.setColumnStretch(2, 1)
+                panel_layout.setContentsMargins(20, 0, 0, 0)
+                self._preproc_step_param_input_widgets[step_name] = {}
+                p_row = 0
+                for key, default_val in self._preprocessing_step_defaults.get(step_name, {}).items():
+                    label = QLabel(key)
+                    label.setToolTip("")
+                    panel_layout.addWidget(label, p_row, 0)
+                    panel_layout.addWidget(
+                        self._make_info_badge(f"Parameter '{key}' for '{step_name}'."),
+                        p_row,
+                        1,
+                    )
+                    w = self._create_preproc_param_widget(step_name, key, default_val)
+                    w.setToolTip("")
+                    self._preproc_step_param_input_widgets[step_name][key] = w
+                    panel_layout.addWidget(w, p_row, 2)
+                    p_row += 1
+                panel.setVisible(False)
+                self._preproc_step_params_widgets[step_name] = panel
+                self.preproc_filter_params_layout.addWidget(panel)
+                continue
+
             cb = QCheckBox(step_name)
             cb.setToolTip("")
             cb.toggled.connect(lambda checked, s=step_name: self._on_preproc_step_toggled(s, checked))
@@ -852,17 +888,12 @@ class PipelineGUI(QMainWindow):
             self._rebuild_sorter_params_ui()
         if state.get("protocol_freq_min") is not None or state.get("protocol_freq_max") is not None:
             # Backward compatibility with older settings files.
-            bandpass_cb = self._preprocessing_step_enabled_widgets.get("bandpass_filter")
-            if bandpass_cb is not None:
-                bandpass_cb.setChecked(True)
-                panel = self._preproc_step_params_widgets.get("bandpass_filter")
-                if panel is not None:
-                    panel.setVisible(True)
-                vals = self._preproc_step_param_input_widgets.get("bandpass_filter", {})
-                if "freq_min" in vals:
-                    self._set_preproc_param_widget_value(vals["freq_min"], float(state.get("protocol_freq_min", 400)))
-                if "freq_max" in vals:
-                    self._set_preproc_param_widget_value(vals["freq_max"], float(state.get("protocol_freq_max", 5000)))
+            self.preproc_filter_choice_combo.setCurrentText("bandpass_filter")
+            vals = self._preproc_step_param_input_widgets.get("bandpass_filter", {})
+            if "freq_min" in vals:
+                self._set_preproc_param_widget_value(vals["freq_min"], float(state.get("protocol_freq_min", 400)))
+            if "freq_max" in vals:
+                self._set_preproc_param_widget_value(vals["freq_max"], float(state.get("protocol_freq_max", 5000)))
             self._update_protocol_from_form()
         self._refresh_intan_channels()
 
@@ -1205,10 +1236,9 @@ class PipelineGUI(QMainWindow):
             panel.setVisible(bool(enabled))
 
     def _get_active_filter_step(self):
-        for step_name in self._filter_steps:
-            cb = self._preprocessing_step_enabled_widgets.get(step_name)
-            if cb is not None and cb.isChecked():
-                return step_name
+        selected = self.preproc_filter_choice_combo.currentText()
+        if selected in self._filter_steps:
+            return selected
         return None
 
     def _set_filter_steps_exclusive(self, selected_filter):
@@ -1216,18 +1246,19 @@ class PipelineGUI(QMainWindow):
             self._set_preproc_step_enabled(step_name, step_name == selected_filter)
 
     def _sync_filter_choice_from_checkboxes(self):
-        active = self._get_active_filter_step() or "None"
+        active = "None"
+        for step_name in self._filter_steps:
+            panel = self._preproc_step_params_widgets.get(step_name)
+            if panel is not None and panel.isVisible():
+                active = step_name
+                break
         self.preproc_filter_choice_combo.blockSignals(True)
         self.preproc_filter_choice_combo.setCurrentText(active)
         self.preproc_filter_choice_combo.blockSignals(False)
 
     def _on_preproc_step_toggled(self, step_name, checked):
-        if step_name in self._filter_steps:
-            selected = step_name if checked else self._get_active_filter_step()
-            self._set_filter_steps_exclusive(selected)
-            self._sync_filter_choice_from_checkboxes()
-        else:
-            self._set_preproc_step_enabled(step_name, checked)
+        # Non-filter steps are controlled by checkboxes.
+        self._set_preproc_step_enabled(step_name, checked)
         self._update_protocol_from_form()
 
     def _on_filter_choice_changed(self, filter_name):
@@ -1238,18 +1269,34 @@ class PipelineGUI(QMainWindow):
     def _update_protocol_from_form(self):
         """Met à jour le dictionnaire protocol à chaque modification d'un champ."""
         p = self._protocol_params
+        existing_pre = p.get("preprocessing", {}) if isinstance(p.get("preprocessing", {}), dict) else {}
         preprocessing = {}
         for step_name in self._preprocessing_steps_order:
-            cb = self._preprocessing_step_enabled_widgets.get(step_name)
-            if cb is None or not cb.isChecked():
-                continue
+            if step_name in self._filter_steps:
+                if step_name != self._get_active_filter_step():
+                    continue
+            else:
+                cb = self._preprocessing_step_enabled_widgets.get(step_name)
+                if cb is None or not cb.isChecked():
+                    continue
             defaults = self._preprocessing_step_defaults.get(step_name, {})
-            values = {}
+            # Preserve unknown/additional keys for this step.
+            values = dict(existing_pre.get(step_name, {})) if isinstance(existing_pre.get(step_name, {}), dict) else {}
             for key, default_val in defaults.items():
                 w = self._preproc_step_param_input_widgets.get(step_name, {}).get(key)
                 if w is not None:
                     values[key] = self._get_preproc_param_widget_value(w, default_val)
             preprocessing[step_name] = values
+
+        # Preserve preprocessing steps that are not represented by current GUI controls.
+        for step_name, step_params in existing_pre.items():
+            if step_name in preprocessing:
+                continue
+            if step_name in self._preprocessing_steps_order:
+                # Steps controlled by GUI remain driven by UI state.
+                continue
+            preprocessing[step_name] = copy.deepcopy(step_params)
+
         p["preprocessing"] = preprocessing
         p.setdefault("postprocessing", {}).setdefault("unit_locations", {})["method"] = self.protocol_unit_locations_method.currentText()
         p.setdefault("postprocessing", {}).setdefault("random_spikes", {})["max_spikes_per_unit"] = self.protocol_random_spikes_max.value()
@@ -1284,11 +1331,14 @@ class PipelineGUI(QMainWindow):
             w.blockSignals(True)
         pre = params.get("preprocessing", {}) if isinstance(params.get("preprocessing", {}), dict) else {}
         for step_name in self._preprocessing_steps_order:
-            cb = self._preprocessing_step_enabled_widgets.get(step_name)
-            if cb is None:
-                continue
             enabled = step_name in pre
-            self._set_preproc_step_enabled(step_name, enabled)
+            if step_name in self._filter_steps:
+                self._set_preproc_step_enabled(step_name, enabled)
+            else:
+                cb = self._preprocessing_step_enabled_widgets.get(step_name)
+                if cb is None:
+                    continue
+                self._set_preproc_step_enabled(step_name, enabled)
             defaults = self._preprocessing_step_defaults.get(step_name, {})
             current_vals = pre.get(step_name, {}) if isinstance(pre.get(step_name, {}), dict) else {}
             for key, default_val in defaults.items():
@@ -1390,11 +1440,32 @@ class PipelineGUI(QMainWindow):
         """Stop the pipeline immediately by terminating the subprocess."""
         if self._pipeline_process and self._pipeline_process.is_alive():
             self._log("Stopping pipeline immediately...")
-            self._pipeline_process.terminate()
-            self._pipeline_process.join(timeout=2.0)
-            if self._pipeline_process.is_alive():
-                self._pipeline_process.kill()
-                self._pipeline_process.join(timeout=1.0)
+            pid = self._pipeline_process.pid
+            try:
+                # On Windows, kill full process tree to stop sorter children instantly.
+                if os.name == "nt" and pid:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2.0,
+                    )
+                else:
+                    self._pipeline_process.terminate()
+                    self._pipeline_process.join(timeout=1.0)
+                    if self._pipeline_process.is_alive():
+                        self._pipeline_process.kill()
+                        self._pipeline_process.join(timeout=0.5)
+            except Exception:
+                # Last resort local kill if tree-kill failed.
+                try:
+                    self._pipeline_process.terminate()
+                    self._pipeline_process.join(timeout=0.5)
+                    if self._pipeline_process.is_alive():
+                        self._pipeline_process.kill()
+                        self._pipeline_process.join(timeout=0.5)
+                except Exception:
+                    pass
             self._pipeline_process = None
             self._reset_pipeline_state()
             self._log("Pipeline stopped.")

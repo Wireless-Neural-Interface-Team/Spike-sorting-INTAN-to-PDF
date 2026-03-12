@@ -8,7 +8,6 @@ import numpy as np
 import spikeinterface.extractors as se
 import probeinterface as ProbeI
 from probe_class import Probe
-import spikeinterface.preprocessing as spre
 
 
 def load_channel_ids_only(folder_path):
@@ -55,9 +54,6 @@ class IntanFile:
         self._adc_channel_recording = None
         self._amplifier_channel_recording = None
         
-        # Signed versions of recordings (for processing compatibility).
-        self._signed_amplifier_channel_recording = None
-
         # Placeholder for preprocessing output.
         self._pre_processed_recording = None 
         
@@ -122,8 +118,7 @@ class IntanFile:
         print("Number of channels:", self.number_of_channels)
         print("Number of segments:", self.number_of_segments)
         
-        # Convert unsigned amplifier signal to signed representation.
-        self._signed_amplifier_channel_recording = spre.unsigned_to_signed(self._amplifier_channel_recording)
+        # Keep raw amplifier recording; unsigned_to_signed is handled by protocol preprocessing.
     
 
     def generate_trigger_timestamps(self,
@@ -208,7 +203,7 @@ class IntanFile:
 
         # Build probe object and attach to recording.
         self._probe = ProbeI.Probe.from_dataframe(probe_df)
-        self._signed_amplifier_channel_recording = self._signed_amplifier_channel_recording.set_probe(self._probe)
+        self._amplifier_channel_recording = self._amplifier_channel_recording.set_probe(self._probe)
 
 
     

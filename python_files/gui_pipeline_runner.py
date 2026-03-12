@@ -45,10 +45,16 @@ def run_pipeline_in_process(params, log_queue):
         my_probe_path = params["my_probe_path"]
         protocol_params = params["protocol_params"]
         use_trigger = params.get("use_trigger", False)
+        preprocessing = protocol_params.get("preprocessing", {}) if isinstance(protocol_params, dict) else {}
 
         _log(f"folder_path: {folder_path}")
         _log(f"output_folder: {output_folder}")
         _log(f"sorter_name: {sorter_name}")
+        _log(
+            "preprocessing steps: "
+            + ", ".join(preprocessing.keys())
+            + (" | unsigned_to_signed=ON" if "unsigned_to_signed" in preprocessing else " | unsigned_to_signed=OFF")
+        )
 
         rhs_files = IntanFile(folder_path)
 
