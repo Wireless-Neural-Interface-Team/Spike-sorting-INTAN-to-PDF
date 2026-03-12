@@ -6,14 +6,11 @@
   "trigger_polarity": "Falling Edge",
   "trigger_min_interval": "5.1",
   "trigger_channel_index": "0",
-  "sorter_name": "spykingcircus2",
+  "sorter_name": "kilosort4",
   "my_probe_path": "C:/Spikesorting_utilities/MEA_RdLGN64.json",
   "protocol_params": {
     "preprocessing": {
-      "bandpass_filter": {
-        "freq_min": 400.0,
-        "freq_max": 5000.0
-      }
+      "unsigned_to_signed": {}
     },
     "postprocessing": {
       "random_spikes": {
@@ -73,6 +70,67 @@
         "deterministic_peaks_detection": false,
         "multi_units_only": false,
         "seed": 42
+      },
+      "kilosort4": {
+        "Th_learned": 8,
+        "Th_single_ch": 6,
+        "Th_universal": 9,
+        "acg_threshold": 0.2,
+        "artifact_threshold": 1000000000.0,
+        "bad_channels": "None",
+        "batch_downsampling": 1,
+        "batch_size": 60000,
+        "binning_depth": 5,
+        "ccg_threshold": 0.25,
+        "chunk_duration": "1s",
+        "clear_cache": false,
+        "cluster_downsampling": 20,
+        "cluster_init_seed": 5,
+        "cluster_neighbors": 10,
+        "delete_recording_dat": true,
+        "dmin": "None",
+        "dminx": 32,
+        "do_CAR": true,
+        "do_correction": true,
+        "drift_smoothing": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "duplicate_spike_ms": 0.25,
+        "highpass_cutoff": 300,
+        "invert_sign": false,
+        "keep_good_only": false,
+        "max_channel_distance": 32,
+        "max_cluster_subset": 25000,
+        "max_peels": 100,
+        "max_threads_per_worker": 1,
+        "min_template_size": 10,
+        "mp_context": "None",
+        "n_jobs": 1,
+        "n_pcs": 6,
+        "n_templates": 6,
+        "nblocks": 1,
+        "nearest_chans": 10,
+        "nearest_templates": 100,
+        "nskip": 25,
+        "nt": 61,
+        "nt0min": "None",
+        "pool_engine": "process",
+        "position_limit": 100,
+        "progress_bar": true,
+        "save_extra_vars": false,
+        "save_preprocessed_copy": false,
+        "scale": "None",
+        "shift": "None",
+        "sig_interp": 20,
+        "skip_kilosort_preprocessing": false,
+        "template_sizes": 5,
+        "templates_from_data": true,
+        "torch_device": "auto",
+        "use_binary_file": true,
+        "whitening_range": 32,
+        "x_centers": "None"
       }
     }
   }

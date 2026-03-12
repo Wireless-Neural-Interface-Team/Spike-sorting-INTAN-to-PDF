@@ -98,6 +98,41 @@ class PipelineGUI(QMainWindow):
         # Form field values (we use QLineEdit.text() etc. directly, no StringVar)
         self._trigger_widgets = []
         self._current_sorter_name = None
+        self._preprocessing_steps_order = [
+            "unsigned_to_signed",
+            "bandpass_filter",
+            "highpass_filter",
+            "notch_filter",
+            "gaussian_filter",
+            "common_reference",
+            "detect_bad_channels",
+            "phase_shift",
+            "rectify",
+        ]
+        self._filter_steps = ["bandpass_filter", "highpass_filter", "notch_filter", "gaussian_filter"]
+        self._preprocessing_step_defaults = {
+            "unsigned_to_signed": {},
+            "bandpass_filter": {"freq_min": 400.0, "freq_max": 5000.0},
+            "highpass_filter": {"freq_min": 300.0},
+            "notch_filter": {"freq": 50.0, "q": 30.0},
+            "gaussian_filter": {"freq_min": 300.0, "freq_max": 6000.0},
+            "common_reference": {"reference": "global", "operator": "median"},
+            "detect_bad_channels": {"method": "std", "std_mad_threshold": 5.0},
+            "phase_shift": {},
+            "rectify": {},
+        }
+        self._preprocessing_step_param_options = {
+            "common_reference": {
+                "reference": ["global", "local"],
+                "operator": ["median", "average"],
+            },
+            "detect_bad_channels": {
+                "method": ["std", "mad", "coherence+psd"],
+            },
+        }
+        self._preprocessing_step_enabled_widgets = {}
+        self._preproc_step_params_widgets = {}
+        self._preproc_step_param_input_widgets = {}
         self._channels_load_thread = None
         self._channels_load_worker = None
         self._channels_debounce_timer = None
@@ -107,7 +142,6 @@ class PipelineGUI(QMainWindow):
         self._last_probe_from_mea_editor = False
         self._mea_editor_sync_timer = None
         self._probe_path = ""
-        self._stop_requested = False
         # Pipeline runs in a subprocess for immediate stop capability
         self._pipeline_process = None  # multiprocessing.Process instance
         self._log_queue = None  # multiprocessing.Queue for log messages from child
@@ -157,7 +191,7 @@ class PipelineGUI(QMainWindow):
         top_bar.addStretch()
         main_layout.addLayout(top_bar)
 
-        # Main content: 2 columns
+        # Main content: left panel + right column
         content = QHBoxLayout()
         content.setSpacing(12)
 
@@ -208,8 +242,6 @@ class PipelineGUI(QMainWindow):
             3,
         )
         r += 1
-
-        content.addWidget(left_widget)
 
         # Right column: Trigger section (independent from left table)
         trigger_group = QGroupBox("Trigger")
@@ -320,26 +352,69 @@ class PipelineGUI(QMainWindow):
         preprocessing_layout.setColumnMinimumWidth(2, 16)
 
         prep = 0
-        preprocessing_layout.addWidget(QLabel("Bandpass freq min (Hz)"), prep, 0)
-        self.protocol_freq_min = QDoubleSpinBox()
-        self.protocol_freq_min.setRange(1, 20000)
-        self.protocol_freq_min.setValue(400)
-        self.protocol_freq_min.setDecimals(0)
-        self.protocol_freq_min.setMaximumWidth(120)
-        self.protocol_freq_min.valueChanged.connect(self._update_protocol_from_form)
-        preprocessing_layout.addWidget(self.protocol_freq_min, prep, 1)
-        preprocessing_layout.addWidget(self._make_info_badge("Bandpass highpass cutoff frequency (Hz)."), prep, 2)
+        preprocessing_layout.addWidget(QLabel("Filter type"), prep, 0)
+        self.preproc_filter_choice_combo = QComboBox()
+        self.preproc_filter_choice_combo.addItems(
+            ["None", "bandpass_filter", "highpass_filter", "notch_filter", "gaussian_filter"]
+        )
+        self.preproc_filter_choice_combo.currentTextChanged.connect(self._on_filter_choice_changed)
+        preprocessing_layout.addWidget(self.preproc_filter_choice_combo, prep, 1)
+        preprocessing_layout.addWidget(
+            self._make_info_badge("Choose one filter family (exclusive)."),
+            prep,
+            2,
+        )
         prep += 1
 
-        preprocessing_layout.addWidget(QLabel("Bandpass freq max (Hz)"), prep, 0)
-        self.protocol_freq_max = QDoubleSpinBox()
-        self.protocol_freq_max.setRange(1, 20000)
-        self.protocol_freq_max.setValue(5000)
-        self.protocol_freq_max.setDecimals(0)
-        self.protocol_freq_max.setMaximumWidth(120)
-        self.protocol_freq_max.valueChanged.connect(self._update_protocol_from_form)
-        preprocessing_layout.addWidget(self.protocol_freq_max, prep, 1)
-        preprocessing_layout.addWidget(self._make_info_badge("Bandpass lowpass cutoff frequency (Hz)."), prep, 2)
+        self.preproc_steps_scroll = QScrollArea()
+        self.preproc_steps_scroll.setWidgetResizable(True)
+        self.preproc_steps_scroll.setMinimumHeight(320)
+        self.preproc_steps_scroll.setMaximumHeight(520)
+        self.preproc_steps_container = QWidget()
+        self.preproc_steps_layout = QGridLayout(self.preproc_steps_container)
+        self.preproc_steps_layout.setColumnStretch(0, 1)
+        self.preproc_steps_layout.setColumnMinimumWidth(1, 16)
+        row = 0
+        for step_name in self._preprocessing_steps_order:
+            cb = QCheckBox(step_name)
+            cb.setToolTip("")
+            cb.toggled.connect(lambda checked, s=step_name: self._on_preproc_step_toggled(s, checked))
+            self.preproc_steps_layout.addWidget(cb, row, 0)
+            self.preproc_steps_layout.addWidget(
+                self._make_info_badge(f"Enable preprocessing step '{step_name}'."),
+                row,
+                1,
+            )
+            self._preprocessing_step_enabled_widgets[step_name] = cb
+            row += 1
+
+            panel = QWidget()
+            panel_layout = QGridLayout(panel)
+            panel_layout.setColumnStretch(2, 1)
+            panel_layout.setContentsMargins(20, 0, 0, 0)
+            self._preproc_step_param_input_widgets[step_name] = {}
+            p_row = 0
+            for key, default_val in self._preprocessing_step_defaults.get(step_name, {}).items():
+                label = QLabel(key)
+                label.setToolTip("")
+                panel_layout.addWidget(label, p_row, 0)
+                panel_layout.addWidget(
+                    self._make_info_badge(f"Parameter '{key}' for '{step_name}'."),
+                    p_row,
+                    1,
+                )
+                w = self._create_preproc_param_widget(step_name, key, default_val)
+                w.setToolTip("")
+                self._preproc_step_param_input_widgets[step_name][key] = w
+                panel_layout.addWidget(w, p_row, 2)
+                p_row += 1
+            panel.setVisible(False)
+            self._preproc_step_params_widgets[step_name] = panel
+            self.preproc_steps_layout.addWidget(panel, row, 0, 1, 3)
+            row += 1
+
+        self.preproc_steps_scroll.setWidget(self.preproc_steps_container)
+        preprocessing_layout.addWidget(self.preproc_steps_scroll, prep, 0, 1, 3)
 
         protocol_main.addWidget(preprocessing_group)
 
@@ -456,11 +531,11 @@ class PipelineGUI(QMainWindow):
 
         # Sorter parameters (dynamic, adapts to selected sorter)
         self.sorter_params_group = QGroupBox("Sorter parameters")
-        self.sorter_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.sorter_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         sorter_params_outer = QVBoxLayout(self.sorter_params_group)
         self.sorter_params_scroll = QScrollArea()
         self.sorter_params_scroll.setWidgetResizable(True)
-        self.sorter_params_scroll.setMaximumHeight(220)
+        self.sorter_params_scroll.setMaximumHeight(16777215)
         self.sorter_params_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.sorter_params_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.sorter_params_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -474,15 +549,24 @@ class PipelineGUI(QMainWindow):
         self.sorter_params_reset_btn = QPushButton("Reset sorter params to defaults")
         self.sorter_params_reset_btn.clicked.connect(self._reset_sorter_params_to_defaults)
         sorter_params_outer.addWidget(self.sorter_params_reset_btn)
-        right_layout.addWidget(self.sorter_params_group)
+        right_layout.addWidget(self.sorter_params_group, 1)
         protocol_container_layout.addWidget(protocol_content)
-        content.addWidget(protocol_container)
-        content.addWidget(right_column)
-        main_layout.addLayout(content)
-        self._update_protocol_from_form()  # Sync initial form values to dict
-        self._rebuild_sorter_params_ui()  # Build sorter params for initial sorter
 
-        # Run / Stop controls
+        # Left panel: top area (inputs + protocol), bottom area (logs)
+        left_top = QWidget()
+        left_top_layout = QHBoxLayout(left_top)
+        left_top_layout.setContentsMargins(0, 0, 0, 0)
+        left_top_layout.setSpacing(12)
+        left_top_layout.addWidget(left_widget, 1)
+        left_top_layout.addWidget(protocol_container, 1)
+
+        left_panel = QWidget()
+        left_panel_layout = QVBoxLayout(left_panel)
+        left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel_layout.setSpacing(8)
+        left_panel_layout.addWidget(left_top, 1)
+
+        # Run / Stop / Clear controls (above logs)
         controls = QHBoxLayout()
         self._run_button = QPushButton("Run Pipeline")
         self._run_button.setFixedWidth(150)
@@ -498,16 +582,27 @@ class PipelineGUI(QMainWindow):
         self._clear_logs_btn.clicked.connect(self._clear_logs)
         controls.addWidget(self._clear_logs_btn)
         controls.addStretch()
-        main_layout.addLayout(controls)
+        left_panel_layout.addLayout(controls)
 
-        # Logs
-        main_layout.addWidget(QLabel("Logs"))
+        # Logs (bottom-left)
+        left_panel_layout.addWidget(QLabel("Logs"))
         self._progressbar = QProgressBar()
         self._progressbar.setRange(0, 0)  # indeterminate
         self._progressbar.setVisible(False)
-        main_layout.addWidget(self._progressbar)
+        left_panel_layout.addWidget(self._progressbar)
 
         self.logs = QTextEdit()
+        self.logs.setReadOnly(True)
+        self.logs.setMinimumHeight(200)
+        left_panel_layout.addWidget(self.logs, 1)
+
+        content.addWidget(left_panel, 2)
+        content.addWidget(right_column, 1)
+        self._apply_protocol_to_form(self._protocol_params)  # Apply default protocol to dynamic form
+        self._update_protocol_from_form()  # Sync initial form values to dict
+        self._rebuild_sorter_params_ui()  # Build sorter params for initial sorter
+
+        main_layout.addLayout(content, 1)
 
         # Widgets to disable when pipeline is running
         self._form_widgets = [
@@ -522,9 +617,6 @@ class PipelineGUI(QMainWindow):
             self.trigger_interval_edit, self.trigger_channel_edit,
             self._clear_logs_btn,
         ]
-        self.logs.setReadOnly(True)
-        self.logs.setMinimumHeight(200)
-        main_layout.addWidget(self.logs, 1)
 
         self._toggle_trigger_fields_state()
 
@@ -759,8 +851,18 @@ class PipelineGUI(QMainWindow):
             self._apply_protocol_to_form(protocol_params)
             self._rebuild_sorter_params_ui()
         if state.get("protocol_freq_min") is not None or state.get("protocol_freq_max") is not None:
-            self.protocol_freq_min.setValue(float(state.get("protocol_freq_min", 400)))
-            self.protocol_freq_max.setValue(float(state.get("protocol_freq_max", 5000)))
+            # Backward compatibility with older settings files.
+            bandpass_cb = self._preprocessing_step_enabled_widgets.get("bandpass_filter")
+            if bandpass_cb is not None:
+                bandpass_cb.setChecked(True)
+                panel = self._preproc_step_params_widgets.get("bandpass_filter")
+                if panel is not None:
+                    panel.setVisible(True)
+                vals = self._preproc_step_param_input_widgets.get("bandpass_filter", {})
+                if "freq_min" in vals:
+                    self._set_preproc_param_widget_value(vals["freq_min"], float(state.get("protocol_freq_min", 400)))
+                if "freq_max" in vals:
+                    self._set_preproc_param_widget_value(vals["freq_max"], float(state.get("protocol_freq_max", 5000)))
             self._update_protocol_from_form()
         self._refresh_intan_channels()
 
@@ -1005,11 +1107,150 @@ class PipelineGUI(QMainWindow):
             target_edit.setText(selected)
             self._save_last_session()
 
+    def _create_preproc_param_widget(self, step_name, param_name, default_val):
+        options = self._preprocessing_step_param_options.get(step_name, {}).get(param_name)
+        if options:
+            w = QComboBox()
+            w.addItems([str(v) for v in options])
+            idx = w.findText(str(default_val))
+            if idx >= 0:
+                w.setCurrentIndex(idx)
+            w.currentTextChanged.connect(self._update_protocol_from_form)
+            return w
+        if isinstance(default_val, bool):
+            w = QCheckBox("")
+            w.setChecked(default_val)
+            w.toggled.connect(self._update_protocol_from_form)
+            return w
+        if isinstance(default_val, int):
+            w = QSpinBox()
+            w.setRange(-999999, 999999)
+            w.setValue(default_val)
+            w.valueChanged.connect(self._update_protocol_from_form)
+            return w
+        if isinstance(default_val, float):
+            w = QDoubleSpinBox()
+            w.setRange(-1e9, 1e9)
+            w.setDecimals(4)
+            w.setValue(default_val)
+            w.valueChanged.connect(self._update_protocol_from_form)
+            return w
+        w = QLineEdit(str(default_val))
+        w.textChanged.connect(self._update_protocol_from_form)
+        return w
+
+    def _get_preproc_param_widget_value(self, widget, default_val):
+        if isinstance(widget, QComboBox):
+            txt = widget.currentText()
+            if isinstance(default_val, int):
+                try:
+                    return int(txt)
+                except ValueError:
+                    return default_val
+            if isinstance(default_val, float):
+                try:
+                    return float(txt)
+                except ValueError:
+                    return default_val
+            if isinstance(default_val, bool):
+                return txt.lower() in ("1", "true", "yes")
+            return txt
+        if isinstance(widget, QCheckBox):
+            return widget.isChecked()
+        if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            return widget.value()
+        if isinstance(widget, QLineEdit):
+            txt = widget.text().strip()
+            if isinstance(default_val, int):
+                try:
+                    return int(txt)
+                except ValueError:
+                    return default_val
+            if isinstance(default_val, float):
+                try:
+                    return float(txt)
+                except ValueError:
+                    return default_val
+            if isinstance(default_val, bool):
+                return txt.lower() in ("1", "true", "yes")
+            return txt
+        return default_val
+
+    def _set_preproc_param_widget_value(self, widget, value):
+        if isinstance(widget, QComboBox):
+            idx = widget.findText(str(value))
+            if idx >= 0:
+                widget.setCurrentIndex(idx)
+            elif widget.count() > 0:
+                widget.setCurrentIndex(0)
+        elif isinstance(widget, QCheckBox):
+            widget.setChecked(bool(value))
+        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            try:
+                widget.setValue(value)
+            except Exception:
+                pass
+        elif isinstance(widget, QLineEdit):
+            widget.setText(str(value))
+
+    def _set_preproc_step_enabled(self, step_name, enabled):
+        """Set one preprocessing step checkbox/panel without emitting its toggled signal."""
+        cb = self._preprocessing_step_enabled_widgets.get(step_name)
+        if cb is not None:
+            cb.blockSignals(True)
+            cb.setChecked(bool(enabled))
+            cb.blockSignals(False)
+        panel = self._preproc_step_params_widgets.get(step_name)
+        if panel is not None:
+            panel.setVisible(bool(enabled))
+
+    def _get_active_filter_step(self):
+        for step_name in self._filter_steps:
+            cb = self._preprocessing_step_enabled_widgets.get(step_name)
+            if cb is not None and cb.isChecked():
+                return step_name
+        return None
+
+    def _set_filter_steps_exclusive(self, selected_filter):
+        for step_name in self._filter_steps:
+            self._set_preproc_step_enabled(step_name, step_name == selected_filter)
+
+    def _sync_filter_choice_from_checkboxes(self):
+        active = self._get_active_filter_step() or "None"
+        self.preproc_filter_choice_combo.blockSignals(True)
+        self.preproc_filter_choice_combo.setCurrentText(active)
+        self.preproc_filter_choice_combo.blockSignals(False)
+
+    def _on_preproc_step_toggled(self, step_name, checked):
+        if step_name in self._filter_steps:
+            selected = step_name if checked else self._get_active_filter_step()
+            self._set_filter_steps_exclusive(selected)
+            self._sync_filter_choice_from_checkboxes()
+        else:
+            self._set_preproc_step_enabled(step_name, checked)
+        self._update_protocol_from_form()
+
+    def _on_filter_choice_changed(self, filter_name):
+        selected = None if filter_name == "None" else filter_name
+        self._set_filter_steps_exclusive(selected)
+        self._update_protocol_from_form()
+
     def _update_protocol_from_form(self):
         """Met à jour le dictionnaire protocol à chaque modification d'un champ."""
         p = self._protocol_params
-        p.setdefault("preprocessing", {}).setdefault("bandpass_filter", {})["freq_min"] = self.protocol_freq_min.value()
-        p.setdefault("preprocessing", {}).setdefault("bandpass_filter", {})["freq_max"] = self.protocol_freq_max.value()
+        preprocessing = {}
+        for step_name in self._preprocessing_steps_order:
+            cb = self._preprocessing_step_enabled_widgets.get(step_name)
+            if cb is None or not cb.isChecked():
+                continue
+            defaults = self._preprocessing_step_defaults.get(step_name, {})
+            values = {}
+            for key, default_val in defaults.items():
+                w = self._preproc_step_param_input_widgets.get(step_name, {}).get(key)
+                if w is not None:
+                    values[key] = self._get_preproc_param_widget_value(w, default_val)
+            preprocessing[step_name] = values
+        p["preprocessing"] = preprocessing
         p.setdefault("postprocessing", {}).setdefault("unit_locations", {})["method"] = self.protocol_unit_locations_method.currentText()
         p.setdefault("postprocessing", {}).setdefault("random_spikes", {})["max_spikes_per_unit"] = self.protocol_random_spikes_max.value()
         p.setdefault("postprocessing", {}).setdefault("waveforms", {})["ms_before"] = self.protocol_waveforms_ms_before.value()
@@ -1023,22 +1264,39 @@ class PipelineGUI(QMainWindow):
 
     def _get_protocol_form_widgets(self):
         """Liste des widgets protocol pour blockSignals."""
-        return [
-            self.protocol_freq_min, self.protocol_freq_max, self.protocol_unit_locations_method,
+        widgets = [
+            self.preproc_filter_choice_combo,
+            self.protocol_unit_locations_method,
             self.protocol_random_spikes_max, self.protocol_waveforms_ms_before, self.protocol_waveforms_ms_after,
             self.protocol_correlograms_window, self.protocol_correlograms_bin,
             self.protocol_spike_amplitudes_peak, self.protocol_template_similarity_method,
             self.protocol_template_metrics_multi,
         ]
+        widgets.extend(self._preprocessing_step_enabled_widgets.values())
+        for step_widgets in self._preproc_step_param_input_widgets.values():
+            widgets.extend(step_widgets.values())
+        return widgets
 
     def _apply_protocol_to_form(self, params):
         """Remplit les champs à partir du dict protocol (bloque les signaux)."""
         widgets = self._get_protocol_form_widgets()
         for w in widgets:
             w.blockSignals(True)
-        bp = params.get("preprocessing", {}).get("bandpass_filter", {})
-        self.protocol_freq_min.setValue(float(bp.get("freq_min", 400)))
-        self.protocol_freq_max.setValue(float(bp.get("freq_max", 5000)))
+        pre = params.get("preprocessing", {}) if isinstance(params.get("preprocessing", {}), dict) else {}
+        for step_name in self._preprocessing_steps_order:
+            cb = self._preprocessing_step_enabled_widgets.get(step_name)
+            if cb is None:
+                continue
+            enabled = step_name in pre
+            self._set_preproc_step_enabled(step_name, enabled)
+            defaults = self._preprocessing_step_defaults.get(step_name, {})
+            current_vals = pre.get(step_name, {}) if isinstance(pre.get(step_name, {}), dict) else {}
+            for key, default_val in defaults.items():
+                w = self._preproc_step_param_input_widgets.get(step_name, {}).get(key)
+                if w is not None:
+                    self._set_preproc_param_widget_value(w, current_vals.get(key, default_val))
+
+        self._sync_filter_choice_from_checkboxes()
         ul = params.get("postprocessing", {}).get("unit_locations", {})
         method = ul.get("method", "center_of_mass") if isinstance(ul, dict) else "center_of_mass"
         idx = self.protocol_unit_locations_method.findText(method)
@@ -1365,7 +1623,7 @@ def run_app():
     if app is None:
         app = QApplication([])
     window = PipelineGUI()
-    window.show()
+    window.showMaximized()
     app.exec()
 
 
