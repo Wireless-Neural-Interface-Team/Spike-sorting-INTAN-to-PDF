@@ -4,6 +4,21 @@
 Subprocess pipeline runner used by gui_run_pipeline.py.
 """
 
+# Fix: SpikeInterface calls version("circus") but PyPI package is "spyking-circus"
+try:
+    from importlib.metadata import version
+    from spikeinterface.sorters.external import spyking_circus
+
+    def _patched_get_sorter_version():
+        try:
+            return version("spyking-circus")
+        except Exception:
+            return "unknown"
+
+    spyking_circus.SpykingcircusSorter.get_sorter_version = staticmethod(_patched_get_sorter_version)
+except Exception:
+    pass
+
 import os
 import traceback
 
@@ -47,14 +62,14 @@ def run_pipeline_in_process(params, log_queue):
         use_trigger = params.get("use_trigger", False)
         preprocessing = protocol_params.get("preprocessing", {}) if isinstance(protocol_params, dict) else {}
 
-        _log(f"[1/5] Dossier Intan: {folder_path}")
-        _log(f"[2/5] Dossier de sortie: {output_folder}")
+        _log(f"[1/5] Intan folder: {folder_path}")
+        _log(f"[2/5] Output folder: {output_folder}")
         _log(f"[3/5] Sorter: {sorter_name}")
-        _log(f"[4/5] Étapes preprocessing: {', '.join(preprocessing.keys()) or '(aucune)'}")
+        _log(f"[4/5] Preprocessing steps: {', '.join(preprocessing.keys()) or '(none)'}")
 
-        _log("Chargement des fichiers Intan...")
+        _log("Loading Intan files...")
         rhs_files = IntanFile(folder_path)
-        _log(f"  → {rhs_files.number_of_channels} canaux détectés")
+        _log(f"  → {rhs_files.number_of_channels} channels detected")
 
         if use_trigger:
             trigger = Trigger(
@@ -67,27 +82,27 @@ def run_pipeline_in_process(params, log_queue):
                 trigger_channel_index=params["trigger_channel_index"],
                 trigger_type=params.get("trigger_type", "electric"),
             )
-            _log("Génération des timestamps trigger...")
+            _log("Generating trigger timestamps...")
             rhs_files.generate_trigger_timestamps(ts_params)
-            _log(f"  → {len(rhs_files.trigger_timestamps)} triggers détectés")
+            _log(f"  → {len(rhs_files.trigger_timestamps)} triggers detected")
 
-        _log("Association de la sonde...")
+        _log("Associating probe...")
         my_probe_df = Probe(my_probe_path)
         rhs_files.associate_probe(my_probe_df)
-        _log("  → Sonde associée")
+        _log("  → Probe associated")
 
-        _log("[5/5] Exécution du sorter + analyseur (peut prendre plusieurs minutes)...")
+        _log("[5/5] Running sorter + analyzer (may take several minutes)...")
         _progress(True)
         sorter = Sorter(sorter_name)
         pipeline = Pipeline(sorter, output_folder, protocol_params, rhs_files)
-        _log("  → Tri terminé")
+        _log("  → Sorting completed")
 
-        _log("Génération du rapport PDF...")
+        _log("Generating PDF report...")
         PDFGenerator(output_folder, pipeline)
         pdf_path = os.path.join(output_folder, f"Summary_figures_sorting_{sorter_name}.pdf")
-        _log(f"  → PDF généré: {pdf_path}")
+        _log(f"  → PDF generated: {pdf_path}")
         _log("")
-        _log("=== Pipeline terminé avec succès ===")
+        _log("=== Pipeline completed successfully ===")
 
         _progress(False)
         log_queue.put(("done", "success", output_folder))

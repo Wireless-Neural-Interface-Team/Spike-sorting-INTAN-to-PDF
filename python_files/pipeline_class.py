@@ -145,7 +145,6 @@ class Pipeline:
         self._rhs_files._pre_processed_recording = rec
 
         # 3) Run sorter with the same recording object.
-        # Use sorter params from protocol (user-editable job_kwargs, etc.) - no forced pipeline override.
         sorter_params = copy.deepcopy(self._protocol_params.get("sorter_params", {}).get(self._sorter.name, {}))
         sorter_params = _sanitize_sorter_params(self._sorter.name, sorter_params)
         sorting_results = ss.run_sorter(
